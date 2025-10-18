@@ -1,0 +1,112 @@
+version: '3.8'
+
+services:
+  # Whisper transcription service
+  whisper-service:
+    build:
+      context: ./whisper-service
+      dockerfile: Dockerfile
+    container_name: whisper-service
+    runtime: nvidia
+    ports:
+      - "5001:5001"
+    environment:
+      - WHISPER_MODEL=base
+      - NVIDIA_VISIBLE_DEVICES=all
+    volumes:
+      - whisper-models:/models/whisper
+      - ./outputs/whisper:/app/outputs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:5001/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - app-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Speaker diarization service
+  diarization-service:
+    build:
+      context: ./diarization-service
+      dockerfile: Dockerfile
+    container_name: diarization-service
+    runtime: nvidia
+    ports:
+      - "5002:5002"
+    environment:
+      - HUGGINGFACE_TOKEN=${HUGGINGFACE_TOKEN}
+      - NVIDIA_VISIBLE_DEVICES=all
+    volumes:
+      - diarization-models:/models/diarization
+      - ./outputs/diarization:/app/outputs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:5002/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - app-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Backend service
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: backend
+    ports:
+      - "5000:5000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - WHISPER_SERVICE_URL=http://whisper-service:5001
+      - DIARIZATION_SERVICE_URL=http://diarization-service:5002
+    volumes:
+      - ./outputs/backend:/app/outputs
+    depends_on:
+      - whisper-service
+      - diarization-service
+    restart: unless-stopped
+    networks:
+      - app-network
+
+  # Frontend service
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - app-network
+
+volumes:
+  # Persistent volume for Whisper models (downloaded once)
+  whisper-models:
+    driver: local
+  
+  # Persistent volume for diarization models (downloaded once)
+  diarization-models:
+    driver: local
+
+networks:
+  app-network:
+    driver: bridge
